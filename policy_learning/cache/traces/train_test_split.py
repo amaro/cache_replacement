@@ -32,6 +32,7 @@ import argparse
 import csv
 import os
 import subprocess
+import random
 
 import numpy as np
 import tqdm
@@ -39,13 +40,8 @@ import tqdm
 if __name__ == "__main__":
   # The cache sets used in the paper:
   # An Imitation Learning Approach to Cache Replacement
-  PAPER_CACHE_SETS = [6, 35, 38, 53, 67, 70, 113, 143, 157, 196, 287, 324, 332,
-                      348, 362, 398, 406, 456, 458, 488, 497, 499, 558, 611,
-                      718, 725, 754, 775, 793, 822, 862, 895, 928, 1062, 1086,
-                      1101, 1102, 1137, 1144, 1175, 1210, 1211, 1223, 1237,
-                      1268, 1308, 1342, 1348, 1353, 1424, 1437, 1456, 1574,
-                      1599, 1604, 1662, 1683, 1782, 1789, 1812, 1905, 1940,
-                      1967, 1973]
+  PAPER_CACHE_SETS = [4,3,2,14,8,10,5,1,11,0,7,13,6,12,9,15,16,17,
+                    18,19,20,21,22,23,24,25,26,27,28,29,30,31]
 
   parser = argparse.ArgumentParser()
   parser.add_argument(
@@ -58,10 +54,10 @@ if __name__ == "__main__":
       "-a", "--associativity", default=16,
       help="Associativity of the cache.")
   parser.add_argument(
-      "-c", "--capacity", default=2 * 1024 * 1024,
+      "-c", "--capacity", default=1 * 1024 * 1024,
       help="Capacity of the cache.")
   parser.add_argument(
-      "-l", "--cache_line_size", default=64,
+      "-l", "--cache_line_size", default=4096,
       help="Size of the cache lines in bytes.")
   parser.add_argument(
       "-b", "--batch_size", default=32,
@@ -75,24 +71,49 @@ if __name__ == "__main__":
 
   for output_filename in output_filenames:
     if os.path.exists(output_filename):
-      raise ValueError(f"File {output_filename} already exists.")
+      print(f"File {output_filename} already exists, overwriting.")
 
   num_cache_lines = args.capacity // args.cache_line_size
-  num_sets = num_cache_lines // args.associativity
+  num_sets = num_cache_lines // args.associativity # 1024
   cache_bits = int(np.log2(args.cache_line_size))
-  set_bits = int(np.log2(num_sets))
+  set_bits = int(np.log2(num_sets)) # = 10
+  assert set_bits == 4
   num_lines = 0
   accepted_cache_sets = set(args.cache_sets)
+
+  # use a dictionary where each value is a list to keep the trace
+  # e.g. trace[0] is a list of tuples for the first
+  # max_accesses_per_tkey contiguous page accesses from original trace
+  trace = {}
+  tkey = 0
+  trace[tkey] = []
+  max_accesses_per_tkey = 1000
+
+  print("reading trace...")
+  with open(args.access_trace_filename, "r") as read:
+    for pc, address in tqdm.tqdm(csv.reader(read)):
+      pc = int(pc, 16)
+      address = int(address, 16)
+      #aligned_address = address >> cache_bits
+      aligned_address = address
+      set_id = aligned_address & ((1 << set_bits) - 1)
+      if set_id in accepted_cache_sets:
+        num_lines += 1
+        if len(trace[tkey]) == max_accesses_per_tkey:
+          tkey += 1
+          trace[tkey] = []
+        trace[tkey].append((pc,address))
+        #write.write(f"0x{pc:x},0x{address:x}\n")
+
+  print("writing trace...")
   with open("all.csv", "w") as write:
-    with open(args.access_trace_filename, "r") as read:
-      for pc, address in tqdm.tqdm(csv.reader(read)):
-        pc = int(pc, 16)
-        address = int(address, 16)
-        aligned_address = address >> cache_bits
-        set_id = aligned_address & ((1 << set_bits) - 1)
-        if set_id in accepted_cache_sets:
-          num_lines += 1
-          write.write(f"0x{pc:x},0x{address:x}\n")
+    while trace:
+      # choose a random tkey and write to file
+      rand_tkey = random.choice(list(trace.keys()))
+      for pc, address in trace[rand_tkey]:
+        write.write(f"0x{pc:x},0x{address:x}\n")
+      # delete tkey from trace
+      del trace[rand_tkey]
 
   split_length = num_lines // 10
   # Make split_length a multiple of batch_size
@@ -131,6 +152,6 @@ if __name__ == "__main__":
   print(cmd)
   subprocess.run(cmd, check=True, shell=True)
 
-  cmd = "rm all.csv"
-  print(cmd)
-  subprocess.run(cmd, check=True, shell=True)
+  #cmd = "rm all.csv"
+  #print(cmd)
+  #subprocess.run(cmd, check=True, shell=True)
